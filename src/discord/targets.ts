@@ -71,6 +71,7 @@ export function resolveDiscordChannelId(raw: string): string {
  *
  * @param raw - The username or raw target string (e.g., "john.doe")
  * @param options - Directory configuration params (cfg, accountId, limit)
+ * @param parseOptions - Messaging target parsing options (defaults, ambiguity message)
  * @returns Parsed MessagingTarget with user ID, or undefined if not found
  */
 export async function resolveDiscordTarget(
@@ -83,9 +84,18 @@ export async function resolveDiscordTarget(
     return undefined;
   }
 
+  const likelyUsername = isLikelyUsername(trimmed);
+  const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
+
+  // Parse directly if it's already a known format. Use a safe parse so ambiguous
+  // numeric targets don't throw when we still want to attempt username lookup.
   const directParse = safeParseDiscordTarget(trimmed, parseOptions);
-  if (isExplicitTargetSyntax(trimmed)) {
+  if (directParse && directParse.kind !== "channel" && !likelyUsername) {
     return directParse;
+  }
+
+  if (!shouldLookup) {
+    return directParse ?? parseDiscordTarget(trimmed, parseOptions);
   }
 
   // Try to resolve as a username via directory lookup
@@ -108,12 +118,12 @@ export async function resolveDiscordTarget(
   }
 
   // Fallback to original parsing (for channels, etc.)
-  return directParse ?? safeParseDiscordTarget(trimmed, parseOptions);
+  return parseDiscordTarget(trimmed, parseOptions);
 }
 
 function safeParseDiscordTarget(
   input: string,
-  options: DiscordTargetParseOptions = {},
+  options: DiscordTargetParseOptions,
 ): MessagingTarget | undefined {
   try {
     return parseDiscordTarget(input, options);
@@ -122,11 +132,31 @@ function safeParseDiscordTarget(
   }
 }
 
-function isExplicitTargetSyntax(input: string): boolean {
-  return (
-    /^<@!?(\d+)>$/.test(input) ||
-    /^(user:|discord:|channel:)/.test(input) ||
-    input.startsWith("@") ||
-    /^\d+$/.test(input)
-  );
+function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions): boolean {
+  if (/^<@!?(\d+)>$/.test(input)) {
+    return true;
+  }
+  if (/^(user:|discord:)/.test(input)) {
+    return true;
+  }
+  if (input.startsWith("@")) {
+    return true;
+  }
+  if (/^\d+$/.test(input)) {
+    return options.defaultKind === "user";
+  }
+  return false;
+}
+
+/**
+ * Check if a string looks like a Discord username (not a mention, prefix, or ID).
+ * Usernames typically don't start with special characters except underscore.
+ */
+function isLikelyUsername(input: string): boolean {
+  // Skip if it's already a known format
+  if (/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(input)) {
+    return false;
+  }
+  // Likely a username if it doesn't match known patterns
+  return true;
 }
